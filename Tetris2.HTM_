@@ -35,14 +35,10 @@
   .btn.full { grid-column: 1 / -1; }
 
   /* Overlays */
-  .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+  .overlay { position:absolute; inset:0; display:none; align-items:center; justify-content:center; }
   .card { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border:1px solid #0003; background:#ffffffaa; color:#000; padding:22px 18px; border-radius:16px; text-align:center; max-width: 90%; }
   .card h2 { margin:0 0 10px 0; }
   .muted { opacity:.7; font-size: 14px; }
-  .cfg { display:flex; align-items:center; gap:10px; justify-content:center; margin:8px 0 2px; font-size:14px; }
-  .sw { width:40px; height:24px; background:#00000015; border-radius:999px; position:relative; cursor:pointer; border:1px solid #0003; }
-  .sw::after { content:""; width:18px; height:18px; border-radius:50%; background:#fff; position:absolute; top:2px; left:2px; box-shadow:0 1px 3px #0004; transition: transform .15s ease; }
-  .sw.on::after { transform: translateX(16px); }
 
   /* Effects helpers */
   .pulse-border { animation: levelPulse 800ms ease; }
@@ -69,25 +65,14 @@
     <div class="game">
       <div class="board" id="boardWrap">
         <canvas id="board" width="300" height="600" aria-label="Spielfeld"></canvas>
-        <!-- Overlay: wird dynamisch für Start/Pause/GameOver verwendet -->
-        <div id="overlay" class="overlay" style="display:flex;">
+        <!-- Overlay: nur für Pause/GameOver -->
+        <div id="overlay" class="overlay">
           <div class="card">
-            <h2 id="ov-title">Start</h2>
-            <div id="ov-dyn">
-              <div class="cfg"><span>Easy Mode (Fall‑Vorschau)</span>
-                <div id="easySwitch" class="sw" role="switch" aria-checked="false" tabindex="0"></div>
-              </div>
-              <p class="muted">Tippe „Start“, um loszulegen. Easy Mode blendet die Drop‑Vorschau ein.</p>
-              <div style="display:flex; gap:8px; justify-content:center; margin-top:10px;">
-                <button id="btnStart" class="btn">Start</button>
-              </div>
-            </div>
-            <div id="ov-actions" style="display:none;">
-              <p id="ov-sub" class="muted">Tippe „Weiter“ um fortzufahren.</p>
-              <div style="display:flex; gap:8px; justify-content:center; margin-top:10px;">
-                <button id="btnResume" class="btn">Weiter</button>
-                <button id="btnRestart" class="btn secondary">Neu starten</button>
-              </div>
+            <h2 id="ov-title">Pause</h2>
+            <p id="ov-sub" class="muted">Tippe „Weiter“ um fortzufahren.</p>
+            <div style="display:flex; gap:8px; justify-content:center; margin-top:10px;">
+              <button id="btnResume" class="btn">Weiter</button>
+              <button id="btnRestart" class="btn secondary">Neu starten</button>
             </div>
           </div>
         </div>
@@ -129,7 +114,6 @@
   // Farben (werden durch globalen Invert-Filter gespiegelt)
   const COLORS = {
     I: '#00FFFF', J: '#1E90FF', L: '#FFA500', O: '#FFD700', S: '#7CFC00', T: '#BA55D3', Z: '#FF6347',
-    GHOST: '#ffffff30',
     FLASH: '#ffffffaa'
   };
 
@@ -165,13 +149,9 @@
 
   const overlay = $('#overlay');
   const ovTitle = $('#ov-title');
-  const ovDyn = $('#ov-dyn');
-  const ovActions = $('#ov-actions');
   const ovSub = $('#ov-sub');
   const btnResume = $('#btnResume');
   const btnRestart = $('#btnRestart');
-  const btnStart = $('#btnStart');
-  const easySwitch = $('#easySwitch');
 
   // Dynamic sizing for mobile: compute cell size based on viewport
   function fitBoard() {
@@ -198,8 +178,6 @@
     }
     return res;
   }
-
-  function clone(obj){ return JSON.parse(JSON.stringify(obj)); }
 
   function canPlace(grid, piece, px, py, shapeOverride=null) {
     const shape = shapeOverride || piece.shape;
@@ -247,12 +225,6 @@
     return { type, shape, x: Math.floor(COLS/2)-Math.ceil(N/2), y: -2, lockStart: null };
   }
 
-  function getGhostY(grid, piece){
-    let y = piece.y;
-    while (canPlace(grid, piece, piece.x, y+1)) y++;
-    return y;
-  }
-
   // Effects
   const particles=[]; // {x,y,vx,vy,life}
   let clearAnim = null; // {rows, t}
@@ -282,14 +254,31 @@
     lines: 0,
     level: 0,
     best: Number(localStorage.getItem('tetris_best')||0),
-    running: false,
+    running: true,
     lastTime: 0,
     dropAcc: 0,
-    easyMode: false,
   };
   bestEl.textContent = state.best;
 
   function levelSpeedMs(level){ return GRAVITY_MS[Math.min(level, GRAVITY_MS.length-1)]; }
+
+  function drawNext() {
+    nctx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
+    const pad = 6;
+    const size = Math.floor((Math.min(nextCanvas.width, nextCanvas.height) - pad*2) / 4);
+    const p = state.next; if (!p) return;
+    const shp = p.shape;
+    let minx=99, maxx=-1, miny=99, maxy=-1;
+    for (let y=0; y<shp.length; y++) for (let x=0; x<shp[y].length; x++) if (shp[y][x]) { minx=Math.min(minx,x); maxx=Math.max(maxx,x); miny=Math.min(miny,y); maxy=Math.max(maxy,y); }
+    const w = (maxx-minx+1), h = (maxy-miny+1);
+    const offx = Math.floor((nextCanvas.width - w*size)/2);
+    const offy = Math.floor((nextCanvas.height - h*size)/2);
+
+    for (let y=miny; y<=maxy; y++) for (let x=minx; x<=maxx; x++) if (shp[y][x]) {
+      nctx.fillStyle = COLORS[p.type];
+      nctx.fillRect(offx + (x-minx)*size, offy + (y-miny)*size, size-1, size-1);
+    }
+  }
 
   function spawn() {
     if (!state.next) state.next = createPiece(drawFromBag());
@@ -428,16 +417,7 @@
       ctx.globalAlpha = 1;
     }
 
-    // Ghost only in Easy Mode
-    if (state.easyMode && state.current && !clearAnim) {
-      const gy = getGhostY(state.grid, state.current);
-      const shp = state.current.shape;
-      for (let j=0; j<shp.length; j++) for (let i=0; i<shp[j].length; i++) if (shp[j][i]) {
-        const x = state.current.x + i; const y = gy + j; if (y>=0) drawCell(x, y, COLORS.GHOST, .6);
-      }
-    }
-
-    // Current piece
+    // Current piece (kein Ghost-Modus)
     if (state.current && !clearAnim) {
       const p = state.current; const shp = p.shape;
       for (let j=0; j<shp.length; j++) for (let i=0; i<shp[j].length; i++) if (shp[j][i]) {
@@ -474,30 +454,9 @@
     }
   }
 
-  function drawNext() {
-    nctx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
-    const pad = 6;
-    const size = Math.floor((Math.min(nextCanvas.width, nextCanvas.height) - pad*2) / 4);
-    const p = state.next; if (!p) return;
-    const shp = p.shape;
-    let minx=99, maxx=-1, miny=99, maxy=-1;
-    for (let y=0; y<shp.length; y++) for (let x=0; x<shp[y].length; x++) if (shp[y][x]) { minx=Math.min(minx,x); maxx=Math.max(maxx,x); miny=Math.min(miny,y); maxy=Math.max(maxy,y); }
-    const w = (maxx-minx+1), h = (maxy-miny+1);
-    const offx = Math.floor((nextCanvas.width - w*size)/2);
-    const offy = Math.floor((nextCanvas.height - h*size)/2);
-
-    for (let y=miny; y<=maxy; y++) for (let x=minx; x<=maxx; x++) if (shp[y][x]) {
-      nctx.fillStyle = COLORS[p.type];
-      nctx.fillRect(offx + (x-minx)*size, offy + (y-miny)*size, size-1, size-1);
-    }
-  }
-
   function setOverlay(mode){
-    // mode: 'start' | 'pause' | 'gameover'
+    // mode: 'pause' | 'gameover'
     overlay.style.display = 'flex';
-    ovActions.style.display = (mode==='pause' || mode==='gameover') ? 'block' : 'none';
-    ovDyn.style.display = (mode==='start') ? 'block' : 'none';
-    if (mode==='start') ovTitle.textContent='Start';
     if (mode==='pause') { ovTitle.textContent='Pause'; ovSub.textContent='Tippe „Weiter“ um fortzufahren.'; }
     if (mode==='gameover') { ovTitle.textContent='Game Over'; ovSub.textContent='Neustart für eine neue Runde.'; }
   }
@@ -507,17 +466,14 @@
   function pauseToggle() {
     if (overlay.style.display === 'flex' && !state.running) return; // game over
     state.running = !state.running;
-    if (state.running) { overlay.style.display = 'none'; state.lastTime = performance.now(); loop(state.lastTime); }
+    if (state.running) { overlay.style.display = 'none'; state.lastTime = performance.now(); requestAnimationFrame(loop); }
     else { setOverlay('pause'); }
   }
 
-  btnResume.addEventListener('click', () => { if (!state.running) { state.running = true; overlay.style.display='none'; state.lastTime = performance.now(); loop(state.lastTime);} });
-  btnRestart && btnRestart.addEventListener('click', () => restart());
-  btnStart && btnStart.addEventListener('click', () => { state.easyMode = easySwitch.classList.contains('on'); restart(true); });
-  easySwitch.addEventListener('click', () => { easySwitch.classList.toggle('on'); easySwitch.setAttribute('aria-checked', easySwitch.classList.contains('on')?'true':'false'); });
-  easySwitch.addEventListener('keydown', (e)=>{ if (e.code==='Space' || e.code==='Enter') { e.preventDefault(); easySwitch.click(); }});
+  btnResume.addEventListener('click', () => { if (!state.running) { state.running = true; overlay.style.display='none'; state.lastTime = performance.now(); requestAnimationFrame(loop);} });
+  btnRestart.addEventListener('click', () => restart());
 
-  function restart(fromStart=false) {
+  function restart() {
     state.grid = emptyGrid();
     state.score = 0; scoreEl.textContent = 0;
     state.lines = 0; linesEl.textContent = 0;
@@ -530,7 +486,7 @@
     state.lastTime = performance.now();
     state.running = true;
     overlay.style.display = 'none';
-    if (fromStart) boardCanvas.focus?.();
+    requestAnimationFrame(loop);
   }
 
   // Input: keyboard
@@ -581,8 +537,8 @@
     requestAnimationFrame(loop);
   }
 
-  // Boot: Start-Overlay offen lassen
-  setOverlay('start');
+  // Boot: sofort starten und Loop anwerfen
+  restart();
 })();
 </script>
 </body>
