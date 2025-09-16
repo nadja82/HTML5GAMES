@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>PCB-Defense – Build UX Fix</title>
+<style>
+  :root{
+    --pcb1:#0d3b2f; --pcb2:#0a2f26; --copper:#c77a2b; --copper-dark:#7a4b19;
+    --silk:#a7ffdf; --text:#e8eef2; --card:#122620; --border:#1c3a34; --accent:#49a6ff;
+    --ok:#4ade80; --bad:#f87171;
+  }
+  html,body{margin:0;height:100%;background:linear-gradient(135deg,var(--pcb1),var(--pcb2));color:var(--text);
+    font:15px system-ui,-apple-system,Segoe UI,Roboto;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:none}
+  #c{display:block;width:100vw;height:100vh}
+
+  /* HUD / Shop */
+  #hud{position:fixed;left:10px;top:10px;display:flex;gap:8px;z-index:10}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:6px 10px;min-width:70px;text-align:center}
+  #shop{position:fixed;right:10px;bottom:10px;display:grid;grid-template-columns:repeat(2,1fr);gap:8px;z-index:11}
+  .btn{background:#1a3a33;border:1px solid var(--border);color:var(--text);padding:10px;border-radius:12px;font-weight:700;letter-spacing:.2px}
+  .btn.small{padding:8px}
+  .btn:disabled{opacity:.45}
+  .btn.active{outline:2px solid var(--accent);}
+
+  #msg{position:fixed;left:50%;top:6%;transform:translateX(-50%);font:800 18px system-ui;opacity:0;transition:opacity .3s;z-index:12}
+  #toast{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);background:#15332c;padding:8px 12px;border-radius:10px;opacity:0;transition:opacity .25s;z-index:12}
+
+  /* Overlays */
+  .overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:20;background:rgba(0,0,0,.55)}
+  .panel{background:#0a1c18;border:1px solid var(--border);border-radius:14px;padding:14px;width:min(92vw,560px)}
+  .panel h2{margin:0 0 8px 0;font:800 18px system-ui}
+  .grid1{display:grid;grid-template-columns:1fr;gap:8px}
+  .pick{background:#173b32;border:1px solid #204b41;border-radius:12px;padding:10px;cursor:pointer}
+  .pick h4{margin:0 0 4px 0}
+  .pick p{margin:0;font-size:13px;opacity:.9}
+
+  /* Tower Kontext */
+  #ctx{position:fixed;display:none;z-index:30;width:240px}
+
+  /* Build-Badge */
+  #buildBadge{position:fixed;right:10px;top:10px;z-index:12;display:none}
+  #buildBadge .card{background:#0a1c18}
+
+  @media (orientation:portrait){
+    #rotateHint{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;z-index:50;background:#0008}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div class="card">💰 <span id="gold">120</span></div>
+  <div class="card">❤️ <span id="lives">10</span></div>
+  <div class="card">🌊 <span id="wave">1</span></div>
+  <div class="card">🗺️ L <span id="lvl">1</span></div>
+</div>
+
+<!-- Build selection badge -->
+<div id="buildBadge"><div class="card">Bauen: <span id="buildWhat">–</span> (<span id="buildCost">–</span>)</div></div>
+
+<div id="shop">
+  <button class="btn" data-item="gun">🔫 <span data-price="gun"></span></button>
+  <button class="btn" data-item="laser" disabled>🔦 <span data-price="laser"></span></button>
+  <button class="btn" data-item="slow" disabled>❄️ <span data-price="slow"></span></button>
+  <button class="btn" data-item="mine">💣 <span data-price="mine"></span></button>
+  <button class="btn small" data-item="rail" disabled>⚡ Rail <span data-price="rail"></span></button>
+  <button class="btn small" data-item="flak" disabled>🧨 Flak <span data-price="flak"></span></button>
+  <button class="btn small" id="cancel">✖️ Cancel</button>
+  <button class="btn small" id="start">▶️ Wave</button>
+</div>
+
+<div id="msg"></div><div id="toast"></div>
+
+<!-- Start Overlay -->
+<div id="startOv" class="overlay">
+  <div class="panel">
+    <h2>PCB-Defense</h2>
+    <p>Stoppe die Viren, bevor sie den <b>CPU-Kern</b> erreichen.</p>
+    <div class="grid1">
+      <button class="btn" id="btnRegen">🔁 Level neu bauen</button>
+      <button class="btn" id="btnBegin">▶️ Spiel starten</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reward Overlay -->
+<div id="reward" class="overlay">
+  <div class="panel">
+    <h2>Level geschafft! Wähle eine Belohnung</h2>
+    <div class="grid1" id="rewardGrid"></div>
+  </div>
+</div>
+
+<!-- Tower Kontext -->
+<div id="ctx" class="panel">
+  <h2 id="ctxTitle" style="font-size:16px">Turm</h2>
+  <div class="grid1">
+    <button class="btn" id="btnUp">⬆️ Upgrade</button>
+    <button class="btn" id="btnSell">♻️ Verkaufen</button>
+  </div>
+</div>
+
+<div id="rotateHint" style="display:none">Bitte ins Querformat drehen 📱↔️</div>
+
+<script>
+/* ---------- Canvas & Layout ---------- */
+const DPR=Math.max(1,Math.min(2.5,devicePixelRatio||1));
+const canvas=document.getElementById('c'), ctx=canvas.getContext('2d');
+function resize(){const w=innerWidth,h=innerHeight;canvas.style.width=w+'px';canvas.style.height=h+'px';canvas.width=Math.floor(w*DPR);canvas.height=Math.floor(h*DPR);ctx.setTransform(DPR,0,0,DPR,0,0);document.getElementById('rotateHint').style.display=(h>w)?'flex':'none';}
+addEventListener('resize',resize,{passive:true});resize();
+
+/* ---------- UI ---------- */
+const $=id=>document.getElementById(id);
+const ui={
+  gold:$('gold'),lives:$('lives'),wave:$('wave'),lvl:$('lvl'),msg:$('msg'),toast:$('toast'),
+  startOv:$('startOv'),btnRegen:$('btnRegen'),btnBegin:$('btnBegin'),
+  reward:$('reward'),rewardGrid:$('rewardGrid'),
+  ctx:$('ctx'),ctxTitle:$('ctxTitle'),btnUp:$('btnUp'),btnSell:$('btnSell'),
+  shopBtns:[...document.querySelectorAll('#shop .btn[data-item]')],cancel:$('cancel'),start:$('start'),
+  buildBadge:document.getElementById('buildBadge'), buildWhat:document.getElementById('buildWhat'), buildCost:document.getElementById('buildCost')
+};
+function showMsg(t,ms=900){ui.msg.textContent=t;ui.msg.style.opacity=1;clearTimeout(showMsg._t);showMsg._t=setTimeout(()=>ui.msg.style.opacity=0,ms);}
+function toast(t,ms=950){ui.toast.textContent=t;ui.toast.style.opacity=1;clearTimeout(toast._t);toast._t=setTimeout(()=>ui.toast.style.opacity=0,ms);}
+
+/* ---------- State ---------- */
+const GS={level:1,wave:1,gold:120,lives:10,buying:null,grid:{cols:14,rows:8,cell:56},path:[],
+  unlocked:{gun:true,mine:true,laser:false,slow:false,rail:false,flak:false},
+  perks:{goldMul:1,gun:{dmg:1,range:1,rate:1},laser:{dmg:1,range:1},slow:{power:1},mine:{dmg:1,aoe:1},rail:{dmg:1},flak:{dmg:1}},
+  priceMul:{gun:1,laser:1,slow:1,mine:1,rail:1,flak:1},
+  occ:new Set(), // belegte Zellen (Türme/Minen)
+  badCells:new Set() // verbotene Zellen (zu nah am Pfad)
+};
+const ENT={enemies:[],towers:[],projectiles:[],traps:[]};
+const particles=[]; let ended=false,totalWaves=0,ghost=null,selected=null;
+
+/* ---------- Pricing / Labels ---------- */
+const PRICES_BASE={gun:90,laser:140,slow:120,mine:60,rail:180,flak:170};
+function getPrice(type){return Math.floor(PRICES_BASE[type]*GS.priceMul[type]);}
+function bumpPrice(type){GS.priceMul[type]=+(GS.priceMul[type]*1.18).toFixed(3);updateShopLabels();}
+function updateShopLabels(){ document.querySelectorAll('[data-price]').forEach(sp=>{const k=sp.getAttribute('data-price'); sp.textContent='('+getPrice(k)+')';});
+  ui.shopBtns.forEach(b=>{if(!GS.unlocked[b.dataset.item]) b.disabled=true;}); }
+updateShopLabels();
+
+/* ---------- PCB Level ---------- */
+function buildRandomLevel(seed=(Math.random()*1e9|0)){
+  GS.grid.rows=8; GS.grid.cell=Math.max(46,Math.min(64,Math.floor(innerHeight/GS.grid.rows))); GS.grid.cols=Math.max(12,Math.floor(innerWidth/GS.grid.cell)-1);
+  const rng=mulberry32(seed),{cols,rows,cell}=GS.grid; const start={c:1,r:1},end={c:cols-2,r:rows-2};
+  let c=start.c,r=start.r; const path=[center(c,r,cell)]; const visited=new Set([key(c,r)]); let budget=cols*rows*2;
+  while(budget-- >0 && (c!==end.c || r!==end.r)){
+    const dirs=[[1,0],[0,1],[-1,0],[0,-1]].sort(()=>rng()-0.5); let moved=false;
+    for(const[dX,dY]of dirs){const nc=c+dX,nr=r+dY;if(nc<1||nr<1||nc>cols-2||nr>rows-2)continue;
+      const k=key(nc,nr); if(visited.has(k)&&rng()<0.6)continue; c=nc;r=nr; visited.add(k); path.push(center(c,r,cell)); moved=true; break;}
+    if(!moved)break; if(Math.abs(c-end.c)+Math.abs(r-end.r)<=1){c=end.c;r=end.r;path.push(center(c,r,cell));break;}
+  }
+  GS.path=path;
+  // verbotene Zellen precomputen (Buffer um Pfad)
+  GS.badCells.clear();
+  for(let R=1;R<rows-1;R++) for(let C=1;C<cols-1;C++){
+    const p=center(C,R,cell); if(distToPath(p.x,p.y)<24) GS.badCells.add(key(C,R));
+  }
+}
+function center(c,r,cell){return{x:c*cell+cell/2,y:r*cell+cell/2};}
+function key(c,r){return c+'_'+r;}
+
+/* ---------- Theme ---------- */
+function drawPCBDecor(){ctx.strokeStyle="#115544";ctx.lineWidth=1;for(let i=0;i<18;i++){const x=(i+1)*(innerWidth/18);ctx.beginPath();ctx.moveTo(x,8);ctx.lineTo(x,innerHeight-8);ctx.stroke();}}
+function drawCopperPath(){const p=GS.path;if(!p.length)return;ctx.lineJoin='round';
+  ctx.strokeStyle=getCSS('--copper-dark');ctx.lineWidth=24;ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);for(let i=1;i<p.length;i++)ctx.lineTo(p[i].x,p[i].y);ctx.stroke();
+  ctx.strokeStyle=getCSS('--copper');ctx.lineWidth=18;ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);for(let i=1;i<p.length;i++)ctx.lineTo(p[i].x,p[i].y);ctx.stroke();
+  const e=p[p.length-1];drawCPU(e.x,e.y,36);
+}
+function drawCPU(x,y,r){ctx.fillStyle="#111";ctx.strokeStyle="#2f2f2f";ctx.lineWidth=2;ctx.beginPath();ctx.rect(x-r,y-r,2*r,2*r);ctx.fill();ctx.stroke();
+  ctx.strokeStyle="#777";for(let i=-r;i<=r;i+=8){ctx.beginPath();ctx.moveTo(x-r-6,y+i);ctx.lineTo(x-r,y+i);ctx.stroke();ctx.beginPath();ctx.moveTo(x+r,y+i);ctx.lineTo(x+r+6,y+i);ctx.stroke();}
+  for(let i=-r;i<=r;i+=8){ctx.beginPath();ctx.moveTo(x+i,y-r-6);ctx.lineTo(x+i,y-r);ctx.stroke();ctx.beginPath();ctx.moveTo(x+i,y+r);ctx.lineTo(x+i,y+r+6);ctx.stroke();}
+  ctx.fillStyle=getCSS('--silk');ctx.font='10px system-ui';ctx.textAlign='center';ctx.fillText('CPU',x,y+3);
+}
+
+/* ---------- Entities ---------- */
+class Enemy{
+  constructor(kind,scale=1){
+    const base={mini:{hp:20,spd:95,sz:12,bounty:4,color:'#ff6b6b'},normal:{hp:54,spd:60,sz:16,bounty:6,color:'#e67e22'},tank:{hp:170,spd:34,sz:20,bounty:12,color:'#a29bfe'},boss:{hp:680,spd:28,sz:26,bounty:60,color:'#c0392b'}}[kind];
+    this.maxhp=Math.round(base.hp*scale);this.hp=this.maxhp;this.spd=base.spd;this.sz=base.sz*Math.min(1.5,0.95+0.12*Math.log2(scale+1));
+    this.bounty=base.bounty*(1+0.03*scale);this.color=base.color;
+    this.x=GS.path[0].x;this.y=GS.path[0].y;this.i=1;this.alive=true;this.slow=0;this.legPhase=Math.random()*Math.PI*2;
+  }
+  update(dt){if(!this.alive)return;const t=GS.path[this.i];if(!t){GS.lives--;this.alive=false;return;}
+    const dx=t.x-this.x,dy=t.y-this.y,d=Math.hypot(dx,dy);if(d<1){this.i++;return;}
+    const v=this.spd*(1-Math.min(0.6,this.slow))*dt;this.x+=dx/d*v;this.y+=dy/d*v;this.slow=Math.max(0,this.slow-dt*0.6);
+    this.legPhase+=dt*18;
+  }
+  draw(){if(!this.alive)return;const s=this.sz;
+    ctx.fillStyle=this.color;ctx.strokeStyle="#00000055";ctx.lineWidth=1.5;ctx.beginPath();ctx.rect(this.x-s/2,this.y-s/2,s,s);ctx.fill();ctx.stroke();
+    ctx.strokeStyle="#00000099";ctx.lineWidth=1;const amp=3,step=Math.PI/2;
+    for(let k=0;k<4;k++){const ph=this.legPhase+k*step,off=Math.sin(ph)*amp;
+      ctx.beginPath();ctx.moveTo(this.x-s/2,this.y-4+off);ctx.lineTo(this.x-s/2-4,this.y-4+off);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(this.x+s/2,this.y+4-off);ctx.lineTo(this.x+s/2+4,this.y+4-off);ctx.stroke();
+    }
+    ctx.fillStyle='#0a0a0a88';ctx.fillRect(this.x-s/2,this.y-s/2-6,s,3);
+    ctx.fillStyle='#2ecc71';ctx.fillRect(this.x-s/2,this.y-s/2-6,s*(this.hp/this.maxhp),3);
+  }
+}
+
+/* Track costs paid to fix money calc & fair sell */
+class Tower{
+  constructor(x,y,type,cCell,rCell,paid){
+    this.x=x; this.y=y; this.type=type; this.cool=0; this.tier=1;
+    this.c=cCell; this.r=rCell;
+    this.costPaid=paid; this.upgradePaid=0;
+    if(type==='gun'){this.range=130;this.rate=0.42;this.damage=18;}
+    if(type==='laser'){this.range=140;this.rate=0.06;this.damage=5;}
+    if(type==='slow'){this.range=110;this.rate=0.5;this.damage=8;this.slow=0.45;}
+    if(type==='rail'){this.range=150;this.rate=0.85;this.damage=40;}
+    if(type==='flak'){this.range=120;this.rate=0.9;this.damage=18;}
+  }
+  stats(){const p=GS.perks[this.type]||{};const tierMul=1+0.25*(this.tier-1);
+    return{range:this.range*(p.range||1),rate:Math.max(0.08,this.rate/(p.rate||1)),damage:this.damage*(p.dmg||1)*tierMul,slow:(this.slow||0)*(GS.perks.slow?.power||1)*tierMul};}
+  upgradeCost(){const base={gun:110,laser:140,slow:120,rail:200,flak:190}[this.type]||110;return Math.floor(base*(this.tier===1?1:1.6));}
+  sellValue(){ const totalPaid=this.costPaid + this.upgradePaid; return Math.max(10, Math.floor(totalPaid*0.6)); }
+  update(dt,enemies){
+    this.cool-=dt; const st=this.stats(); let tgt=null,score=-1;
+    for(const e of enemies){if(!e.alive)continue;const d=Math.hypot(e.x-this.x,e.y-this.y);if(d<=st.range){const s=e.i + d/1000;if(s>score){score=s;tgt=e;}}}
+    if(!tgt) return;
+    if(this.type==='laser'){
+      tgt.hp-=st.damage*dt*6; addBeam(this.x,this.y,tgt.x,tgt.y);
+      if(tgt.hp<=0){ tgt.alive=false; GS.gold+=Math.round(tgt.bounty*GS.perks.goldMul); }
+      return;
+    }
+    if(this.cool<=0){
+      if(this.type==='slow') tgt.slow=Math.max(tgt.slow,st.slow);
+      ENT.projectiles.push(new Projectile(this.x,this.y,tgt,st.damage,this.type));
+      this.cool=st.rate;
+    }
+  }
+  draw(){
+    if(this.type==='flak'){drawCapacitor(this.x,this.y,14);}else if(this.type==='rail'){drawInductor(this.x,this.y,13);}
+    else if(this.type==='laser'){drawLED(this.x,this.y,11);}else if(this.type==='slow'){drawResistor(this.x,this.y,10);}else{drawICSmall(this.x,this.y,10);}
+    if(selected===this){ const r=this.stats().range; ctx.strokeStyle="rgba(167,255,223,.45)"; ctx.lineWidth=1; ctx.setLineDash([6,4]); ctx.beginPath(); ctx.arc(this.x,this.y,r,0,Math.PI*2); ctx.stroke(); ctx.setLineDash([]); }
+    ctx.fillStyle=getCSS('--silk');ctx.font='10px system-ui';ctx.textAlign='center';ctx.fillText('T'+this.tier,this.x,this.y+20);
+  }
+}
+class Projectile{
+  constructor(x,y,t,dmg,type){this.x=x;this.y=y;this.t=t;this.spd=380;this.dmg=dmg;this.alive=true;this.type=type;}
+  update(dt){if(!this.alive||!this.t.alive){this.alive=false;return;}const dx=this.t.x-this.x,dy=this.t.y-this.y,d=Math.hypot(dx,dy);
+    if(d<(this.t.sz/2)){
+      if(this.type==='rail'){ this.t.hp-=this.dmg; hit(); if(this.t.hp<=0){this.t.alive=false; GS.gold+=Math.round(this.t.bounty*GS.perks.goldMul);} this.dmg*=0.6; if(this.dmg<10){this.alive=false;return;} this.x+=(dx/d)*8; this.y+=(dy/d)*8; return; }
+      if(this.type==='flak'){ for(const k of ENT.enemies){ const dd=Math.hypot(k.x-this.x,k.y-this.y); if(dd<60){ k.hp-=this.dmg*0.7; if(k.hp<=0&&k.alive){k.alive=false;GS.gold+=Math.round(k.bounty*GS.perks.goldMul);} } }
+        particles.push({x:this.x,y:this.y,t:0,kind:'boom'}); hit(); this.alive=false; return; }
+      this.t.hp-=this.dmg; hit(); if(this.t.hp<=0){ this.t.alive=false; GS.gold+=Math.round(this.t.bounty*GS.perks.goldMul); }
+      this.alive=false; return;
+    }
+    const v=this.spd*dt; this.x+=dx/d*v; this.y+=dy/d*v;
+  }
+  draw(){ if(!this.alive) return; ctx.beginPath(); ctx.rect(this.x-2,this.y-2,4,4); ctx.fillStyle=(this.type==='rail')?'#ff7675':(this.type==='flak'?'#b084f5':'#f1c40f'); ctx.fill(); }
+}
+class Mine{
+  constructor(x,y,cCell,rCell,paid){ this.x=x; this.y=y; this.c=cCell; this.r=rCell; this.costPaid=paid;
+    this.armedAt=performance.now(); this.used=false; this.rTrig=16; this.aoe=80; }
+  sellValue(){ return Math.max(6, Math.floor(this.costPaid*0.6)); }
+  update(dt,enemies){ if(this.used) return; if(performance.now()-this.armedAt<120) return;
+    for(const e of enemies){ if(!e.alive) continue; const d=Math.hypot(e.x-this.x,e.y-this.y); if(d<this.rTrig){
+      const dmgBase=60*GS.perks.mine.dmg, aoeR=this.aoe*GS.perks.mine.aoe;
+      for(const k of enemies){ const dd=Math.hypot(k.x-this.x,k.y-this.y); if(dd<aoeR){ k.hp-=dmgBase; if(k.hp<=0&&k.alive){k.alive=false; GS.gold+=Math.round(k.bounty*GS.perks.goldMul);} } }
+      this.used=true; particles.push({x:this.x,y:this.y,t:0,kind:'boom'}); boom(); break; } }
+  }
+  draw(){ if(this.used) return; ctx.fillStyle="#7a5c36"; ctx.beginPath(); ctx.rect(this.x-7,this.y-5,14,10); ctx.fill(); ctx.fillStyle="#d35400"; ctx.beginPath(); ctx.rect(this.x-4,this.y-3,8,6); ctx.fill(); }
+}
+
+/* ---------- Tower Glyphs ---------- */
+function drawICSmall(x,y,r){ctx.fillStyle="#0b1115";ctx.strokeStyle="#334";ctx.lineWidth=2;ctx.beginPath();ctx.rect(x-r,y-r,2*r,2*r);ctx.fill();ctx.stroke();}
+function drawLED(x,y,r){ctx.fillStyle="#f39c12";ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle="#aa6e0a";ctx.stroke();}
+function drawResistor(x,y,r){ctx.fillStyle="#b5651d";ctx.beginPath();ctx.rect(x-r-6,y-r/2,2*r+12,r);ctx.fill();ctx.fillStyle="#d79f62";ctx.fillRect(x-r/2,y-r/2,r,r);}
+function drawInductor(x,y,r){ctx.strokeStyle="#a9711a";ctx.lineWidth=3;ctx.beginPath();for(let i=-r;i<=r;i+=6){ctx.moveTo(x+i,y-8);ctx.lineTo(x+i,y+8);}ctx.stroke();ctx.lineWidth=1;}
+function drawCapacitor(x,y,r){ctx.fillStyle="#4e6cff";ctx.beginPath();ctx.rect(x-r,y-r,2*r,2*r);ctx.fill();ctx.strokeStyle="#223";ctx.stroke();ctx.fillStyle="#8ea1ff";ctx.fillRect(x-2,y-r,4,2*r);}
+
+function addBeam(x1,y1,x2,y2){particles.push({x1,y1,x2,y2,t:0,kind:'beam'});}
+function drawParticles(dt){for(const prt of particles){prt.t+=dt;if(prt.kind==='beam'){ctx.globalAlpha=0.85*(1-Math.min(1,prt.t*3));ctx.strokeStyle='#f5c16c';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(prt.x1,prt.y1);ctx.lineTo(prt.x2,prt.y2);ctx.stroke();ctx.globalAlpha=1;if(prt.t>0.22)prt.dead=true;}if(prt.kind==='boom'){const r=22+prt.t*120,a=1-Math.min(1,prt.t*2);ctx.globalAlpha=a;ctx.strokeStyle='#ffa94d';ctx.beginPath();ctx.arc(prt.x,prt.y,r,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;if(prt.t>0.55)prt.dead=true;}}for(let i=particles.length-1;i>=0;i--)if(particles[i].dead)particles.splice(i,1);}
+
+/* ---------- Audio ---------- */
+let AC=null;function ensureAudio(){if(!AC){AC=new(window.AudioContext||window.webkitAudioContext)();}}
+function b(freq,ms,g){if(!AC)return;const o=AC.createOscillator(),gN=AC.createGain();o.type='square';o.frequency.value=freq;gN.gain.value=g;o.connect(gN).connect(AC.destination);o.start();o.stop(AC.currentTime+ms/1000);}
+const place=()=>{ensureAudio();b(660,70,0.05);},upgrade=()=>{ensureAudio();b(880,90,0.05);setTimeout(()=>b(1180,80,0.04),70);},sell=()=>{ensureAudio();b(300,90,0.04);},wave=()=>{ensureAudio();b(520,120,0.05);},rewardS=()=>{ensureAudio();b(700,90,0.05);setTimeout(()=>b(950,100,0.05),90);},boom=()=>{ensureAudio();b(180,60,0.05);},hit=()=>{ensureAudio();b(520,25,0.03);};
+
+/* ---------- Waves & Difficulty ---------- */
+const WaveMgr={spawning:false,queue:[],timer:0,
+  makeWave(){const w=GS.wave,L=GS.level,pressure=1+(L-1)*0.45,scale=1+(w-1)*0.22*pressure;
+    const pack=[];const mini=Math.round((5+w*1.1)*pressure),norm=Math.round((4+w*0.85)*pressure),tank=Math.max(0,Math.round((w-2)*0.45*pressure));
+    for(let i=0;i<mini;i++)pack.push(['mini',scale*0.9]);for(let i=0;i<norm;i++)pack.push(['normal',scale]);for(let i=0;i<tank;i++)pack.push(['tank',scale*1.2]);if(w%5===0)pack.push(['boss',scale*1.6]);
+    shuffle(pack);this.queue=pack;this.timer=Math.max(0.26,0.88 - w*0.035 - (L-1)*0.055);this.spawning=true;showMsg(`Wave ${w} — Level ${GS.level}`);},
+  update(dt){if(!this.spawning)return;this.timer-=dt;if(this.timer<=0&&this.queue.length>0){const[k,s]=this.queue.shift();ENT.enemies.push(new Enemy(k,s));this.timer=Math.max(0.14,0.46 - GS.wave*0.018 - (GS.level-1)*0.045);}if(this.queue.length===0)this.spawning=false;},
+  next(){GS.wave++;if(GS.wave===11){GS.level++;GS.wave=1;buildRandomLevel();rebuildForbidden();snapTowers();showRewardPicker();}
+    this.makeWave();GS.gold+=Math.round((30+6*GS.wave+10*(GS.level-1))*GS.perks.goldMul);wave();}
+};
+
+/* ---------- Rewards ---------- */
+const REWARDS=[{id:'unlock_laser',title:'🔦 Laser freischalten',desc:'Kontinuierlicher Strahl-Schaden.',apply:()=>unlock('laser')},
+{id:'unlock_slow',title:'❄️ Slow freischalten',desc:'Verlangsamt & schädigt.',apply:()=>unlock('slow')},
+{id:'unlock_rail',title:'⚡ Rail freischalten',desc:'Durchschlägt mehrere Viren.',apply:()=>unlock('rail')},
+{id:'unlock_flak',title:'🧨 Flak freischalten',desc:'Split-AoE gegen Gruppen.',apply:()=>unlock('flak')},
+{id:'perk_gun_dmg',title:'🔫 Gun +15% DMG',desc:'Mehr DPS.',apply:()=>GS.perks.gun.dmg*=1.15},
+{id:'perk_gun_rate',title:'🔫 Gun +12% Rate',desc:'Schneller feuern.',apply:()=>GS.perks.gun.rate*=1.12},
+{id:'perk_laser_rng',title:'🔦 Laser +20% Range',desc:'Mehr Reichweite.',apply:()=>GS.perks.laser.range*=1.20},
+{id:'perk_laser_dmg',title:'🔦 Laser +15% DMG',desc:'Kräftigerer Beam.',apply:()=>GS.perks.laser.dmg*=1.15},
+{id:'perk_mine',title:'💣 Mine +25% DMG/+15% AoE',desc:'Stärkere Explosion.',apply:()=>{GS.perks.mine.dmg*=1.25;GS.perks.mine.aoe*=1.15;}},
+{id:'perk_gold',title:'💰 +10% Gold',desc:'Mehr Bounty.',apply:()=>GS.perks.goldMul*=1.10},
+{id:'perk_slow',title:'❄️ Slow +15% Power',desc:'Stärkerer Slow.',apply:()=>GS.perks.slow.power*=1.15},
+{id:'perk_rail',title:'⚡ Rail +15% DMG',desc:'Härterer Durchschlag.',apply:()=>GS.perks.rail.dmg*=1.15},
+{id:'perk_flak',title:'🧨 Flak +15% DMG',desc:'Größere Splitwirkung.',apply:()=>GS.perks.flak.dmg*=1.15}];
+function unlock(k){GS.unlocked[k]=true;rewardS();toast(`${k.toUpperCase()} freigeschaltet!`);updateShopLabels();}
+function showRewardPicker(){const pool=[];for(const r of REWARDS){const isU=r.id.startsWith('unlock_');if(isU){const k=r.id.split('_')[1];if(!GS.unlocked[k])pool.push(r,r,r);}pool.push(r);}const picks=uniqueSample(pool,3);
+  ui.rewardGrid.innerHTML=picks.map(p=>`<div class="pick" data-id="${p.id}"><h4>${p.title}</h4><p>${p.desc}</p></div>`).join('');
+  ui.reward.style.display='flex';
+  ui.rewardGrid.querySelectorAll('.pick').forEach(el=>el.addEventListener('click',()=>{const r=REWARDS.find(x=>x.id===el.dataset.id);r.apply();ui.reward.style.display='none';toast('Belohnung aktiviert');},{once:true}));}
+
+/* ---------- Shop / Placement / Context ---------- */
+function setActiveBtn(key){ ui.shopBtns.forEach(b=>b.classList.toggle('active', b.dataset.item===key)); }
+ui.shopBtns.forEach(b=>b.addEventListener('click',()=>{
+  const t=b.dataset.item; if(!GS.unlocked[t]){toast('Noch gesperrt');return;}
+  const price=getPrice(t); GS.buying=t; showBuildBadge(t,price); setActiveBtn(t); selected=null; hideCtx();
+},{passive:true}));
+ui.cancel.addEventListener('click',()=>cancelBuild(),{passive:true});
+function cancelBuild(){ GS.buying=null; ghost=null; setActiveBtn(null); ui.buildBadge.style.display='none'; toast('Abgebrochen'); }
+
+ui.start.addEventListener('click',()=>{ if(!WaveMgr.spawning && ENT.enemies.every(e=>!e.alive)) WaveMgr.next(); },{passive:true});
+
+canvas.addEventListener('pointermove',e=>{ if(!GS.buying) return; const s=snapCell(...pos(e)); ghost=s; });
+canvas.addEventListener('pointerdown',e=>{
+  const s=snapCell(...pos(e));
+  // Auswahl, wenn kein Kauf aktiv
+  if(!GS.buying){
+    const t=ENT.towers.find(t=>t.c===s.c && t.r===s.r);
+    if(t){ selected=t; showCtxAt(s.x,s.y,t); return; }
+    hideCtx(); selected=null; return;
+  }
+  // Bauen nur an validen Zellen
+  if(!isValidPlacement(s.c,s.r,GS.buying)){ toast('Ungültige Position'); return; }
+  const price=getPrice(GS.buying);
+  if(GS.gold<price){ toast('Nicht genug Gold'); return; }
+  // Platzieren
+  if(GS.buying==='mine'){
+    const mine=new Mine(s.x,s.y,s.c,s.r,price);
+    ENT.traps.push(mine);
+  }else{
+    const tw=new Tower(s.x,s.y,GS.buying,s.c,s.r,price);
+    ENT.towers.push(tw);
+  }
+  GS.gold-=price; bumpPrice(GS.buying);
+  GS.occ.add(key(s.c,s.r));
+  place(); ui.buildBadge.style.display='none'; setActiveBtn(null); GS.buying=null; ghost=null;
+});
+
+function showCtxAt(x,y,t){
+  ui.ctxTitle.textContent=`${icon(t.type)} ${t.type.toUpperCase()} • T${t.tier}`;
+  ui.btnUp.textContent=(t.tier<3)?`⬆️ Upgrade (${t.upgradeCost()})`:'Max. Tier';
+  ui.btnUp.disabled=(t.tier>=3||GS.gold<t.upgradeCost());
+  ui.btnSell.textContent=`♻️ Verkaufen (+${t.sellValue()})`;
+  ui.ctx.style.left=Math.min(innerWidth-260,Math.max(8,x+8))+'px';
+  ui.ctx.style.top =Math.min(innerHeight-160,Math.max(8,y+8))+'px';
+  ui.ctx.style.display='block';
+  ui.btnUp.onclick=()=>{ if(t.tier<3 && GS.gold>=t.upgradeCost()){ GS.gold-=t.upgradeCost(); t.upgradePaid+=t.upgradeCost(); t.tier++; upgrade(); showCtxAt(x,y,t);} };
+  ui.btnSell.onclick=()=>{ GS.gold+=t.sellValue(); GS.occ.delete(key(t.c,t.r)); ENT.towers.splice(ENT.towers.indexOf(t),1); hideCtx(); sell(); selected=null; };
+}
+function hideCtx(){ ui.ctx.style.display='none'; }
+
+/* ---------- Build Validierung ---------- */
+function rebuildForbidden(){ // nach neuem Level
+  GS.badCells.clear();
+  const {rows,cols,cell}=GS.grid;
+  for(let R=1;R<rows-1;R++) for(let C=1;C<cols-1;C++){
+    const p=center(C,R,cell); if(distToPath(p.x,p.y)<24) GS.badCells.add(key(C,R));
+  }
+}
+function isValidPlacement(c,r,type){
+  // nur Innenzellen, nicht zu nah am Pfad, nicht belegt
+  const k=key(c,r);
+  if(c<1||r<1||c>GS.grid.cols-2||r>GS.grid.rows-2) return false;
+  if(GS.badCells.has(k)) return false;
+  if(GS.occ.has(k)) return false;
+  return true;
+}
+
+/* ---------- Input/Math Helpers ---------- */
+function pos(e){const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};}
+function snapCell(x,y){ const c=GS.grid.cell; let C=Math.round(x/c), R=Math.round(y/c);
+  C=Math.max(1,Math.min(GS.grid.cols-1,C)); R=Math.max(1,Math.min(GS.grid.rows-1,R));
+  const cc=Math.max(1,Math.min(GS.grid.cols-2,C)), rr=Math.max(1,Math.min(GS.grid.rows-2,R));
+  const p=center(cc,rr,c); return {c:cc,r:rr,x:p.x,y:p.y}; }
+function distToPath(x,y){ let best=1e9,P=GS.path; for(let i=1;i<P.length;i++){ best=Math.min(best, segDist(x,y,P[i-1].x,P[i-1].y,P[i].x,P[i].y)); } return best; }
+function segDist(px,py,x1,y1,x2,y2){ const A=px-x1,B=py-y1,C=x2-x1,D=y2-y1; const dot=A*C+B*D,len=C*C+D*D; let t=len?dot/len:0; t=Math.max(0,Math.min(1,t)); const xx=x1+t*C,yy=y1+t*D; return Math.hypot(px-xx,py-yy); }
+function getCSS(name){return getComputedStyle(document.documentElement).getPropertyValue(name);}
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]];}}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function uniqueSample(arr,k){const s=[],used=new Set();let tries=0;while(s.length<k&&tries<500){const i=(Math.random()*arr.length)|0;const id=arr[i].id;if(!used.has(id)){s.push(arr[i]);used.add(id);}tries++;}return s;}
+function icon(type){return({gun:'🔫',laser:'🔦',slow:'❄️',mine:'💣',rail:'⚡',flak:'🧨'})[type]||'🛡️';}
+
+/* ---------- Loop ---------- */
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(0.033,(now-last)/1000);last=now;
+  WaveMgr.update(dt);
+  for(const t of ENT.towers)t.update(dt,ENT.enemies);
+  for(const e of ENT.enemies)e.update(dt);
+  for(const p of ENT.projectiles)p.update(dt);
+  for(const m of ENT.traps)m.update(dt,ENT.enemies);
+  ENT.projectiles=ENT.projectiles.filter(p=>p.alive);
+  ENT.enemies=ENT.enemies.filter(e=>e.alive||e.hp>0);
+
+  if(!WaveMgr.spawning && ENT.enemies.every(e=>!e.alive)){ totalWaves++; WaveMgr.next(); GS.gold+=Math.round(8*GS.perks.goldMul); }
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawPCBDecor(); drawCopperPath();
+
+  // Wenn im Build-Modus: erlaubte/unerlaubte Visualisierung (Ghost)
+  drawBuildGhost();
+
+  for(const t of ENT.towers)t.draw();
+  for(const m of ENT.traps)m.draw();
+  for(const e of ENT.enemies)e.draw();
+  for(const p of ENT.projectiles)p.draw();
+  drawParticles(dt);
+
+  ui.gold.textContent=Math.floor(GS.gold); ui.lives.textContent=GS.lives; ui.wave.textContent=GS.wave; ui.lvl.textContent=GS.level;
+
+  if(GS.lives<=0){return gameOver();}
+  requestAnimationFrame(loop);
+}
+
+function drawBuildGhost(){
+  if(!GS.buying || !ghost) return;
+  const valid=isValidPlacement(ghost.c,ghost.r,GS.buying) && GS.gold>=getPrice(GS.buying);
+  const color=valid?'var(--ok)':'var(--bad)';
+  ctx.globalAlpha=0.65;
+  // Ghost-Sprite
+  if(GS.buying==='flak') drawCapacitor(ghost.x,ghost.y,14);
+  else if(GS.buying==='rail') drawInductor(ghost.x,ghost.y,13);
+  else if(GS.buying==='laser') drawLED(ghost.x,ghost.y,11);
+  else if(GS.buying==='slow') drawResistor(ghost.x,ghost.y,10);
+  else drawICSmall(ghost.x,ghost.y,10);
+  // Zellrahmen
+  ctx.globalAlpha=1;
+  ctx.strokeStyle=color; ctx.lineWidth=2; ctx.setLineDash([6,4]);
+  ctx.strokeRect(ghost.x-GS.grid.cell/2+1, ghost.y-GS.grid.cell/2+1, GS.grid.cell-2, GS.grid.cell-2);
+  ctx.setLineDash([]);
+  // Falls ungültig: kleines Hinweis-X
+  if(!valid){ ctx.strokeStyle=color; ctx.beginPath(); ctx.moveTo(ghost.x-8,ghost.y-8); ctx.lineTo(ghost.x+8,ghost.y+8); ctx.moveTo(ghost.x+8,ghost.y-8); ctx.lineTo(ghost.x-8,ghost.y+8); ctx.stroke(); }
+}
+
+/* ---------- Highscore (nur nach Game Over) ---------- */
+const HS_KEY='pcb_td_hs_v3';
+function pushHS(name,score){
+  try{ const arr=JSON.parse(localStorage.getItem(HS_KEY)||'[]'); arr.push({name,score,level:GS.level,wavesTotal:totalWaves,date:Date.now()});
+    arr.sort((a,b)=>b.score-a.score); localStorage.setItem(HS_KEY, JSON.stringify(arr.slice(0,50))); }catch(e){}
+}
+
+/* ---------- Game Over ---------- */
+function gameOver(){
+  if(ended)return;ended=true;
+  ctx.fillStyle='rgba(0,0,0,0.65)';ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle='#fff';ctx.font='26px system-ui';ctx.textAlign='center';
+  ctx.fillText('GAME OVER',canvas.width/2,canvas.height/2-18);
+  ctx.font='14px system-ui';ctx.fillText('Highscore speichern…',canvas.width/2,canvas.height/2+8);
+  setTimeout(()=>{
+    const name=(prompt('Name (max 16):','Player')||'Player').slice(0,16);
+    const score=Math.floor((GS.level-1)*1200 + GS.wave*150 + GS.gold);
+    pushHS(name,score);
+    alert('Highscore gespeichert!');
+  },120);
+}
+
+/* ---------- Boot / Start ---------- */
+function snapTowers(){ for(const t of ENT.towers){ const s={c:t.c,r:t.r}; const p=center(s.c,s.r,GS.grid.cell); t.x=p.x; t.y=p.y; } }
+function clearOcc(){ GS.occ.clear(); for(const t of ENT.towers) GS.occ.add(key(t.c,t.r)); for(const m of ENT.traps) GS.occ.add(key(m.c,m.r)); }
+function boot(){
+  buildRandomLevel(); rebuildForbidden();
+  ENT.enemies.length=0;ENT.towers.length=0;ENT.projectiles.length=0;ENT.traps.length=0;particles.length=0;
+  GS.gold=120;GS.lives=10;GS.wave=1;GS.level=1;ghost=null;ended=false;totalWaves=0;selected=null;
+  Object.keys(GS.priceMul).forEach(k=>GS.priceMul[k]=1); updateShopLabels(); setActiveBtn(null); ui.buildBadge.style.display='none';
+  // Startturm auf valide Zelle nahe Start
+  const startCell={c:2,r:2}; const p=center(startCell.c,startCell.r,GS.grid.cell);
+  const t0=new Tower(p.x,p.y,'gun',startCell.c,startCell.r,0); ENT.towers.push(t0); GS.occ.add(key(startCell.c,startCell.r));
+  WaveMgr.makeWave(); requestAnimationFrame(loop);
+}
+function startMenu(){ ui.startOv.style.display='flex'; }
+ui.btnRegen.onclick=()=>{ buildRandomLevel(); rebuildForbidden(); toast('Level neu gebaut'); };
+ui.btnBegin.onclick=()=>{ ui.startOv.style.display='none'; ensureAudio(); boot(); };
+
+/* ---------- Build Badge ---------- */
+function showBuildBadge(type,cost){ ui.buildBadge.style.display='block'; ui.buildWhat.textContent=type.toUpperCase(); ui.buildCost.textContent=cost; }
+
+/* ---------- Init ---------- */
+buildRandomLevel(); rebuildForbidden(); startMenu();
+
+/* ---------- Utils ---------- */
+function getCSS(name){return getComputedStyle(document.documentElement).getPropertyValue(name);}
+</script>
+</body>
+</html>
