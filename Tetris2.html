@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Tetris – Mobil, invertiert (ES5 v2.8.3 – RandInit)</title>
+<style>
+  html { filter: invert(1) hue-rotate(180deg); background:#fff; height:100%; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font-family: Arial, Helvetica, sans-serif;
+         color:#000; background:#eee; display:flex; flex-direction:column; min-height:100vh; }
+  .pagebg { position:fixed; inset:0; z-index:-1; background-repeat:no-repeat; background-size:cover; background-position:center;
+            transition: opacity 1200ms ease; opacity:0; }
+  .pagebg.on { opacity:1; }
+  .wrap { display:flex; flex-direction:column; align-items:center; gap:12px; padding:12px; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .topbar { width:100%; max-width:520px; display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  .brand { font-weight:700; letter-spacing:.3px; }
+  .metrics { display:flex; gap:10px; font-variant-numeric: tabular-nums; align-items:center; flex-wrap:wrap; }
+  .pill { padding:6px 10px; border:1px solid #0003; border-radius:999px; background:#0000000a; }
+  .game { width:100%; max-width:520px; display:flex; gap:12px; align-items:flex-start; justify-content:center; }
+  .board { position:relative; }
+  canvas { display:block; background:#111; border-radius:14px; box-shadow:0 6px 20px #00000022; touch-action:none; }
+  .sidebar { width:min(36vw,160px); min-width:120px; display:flex; flex-direction:column; gap:10px; }
+  .panel { border:1px solid #0003; border-radius:12px; padding:10px; background:#00000008; }
+  .panel h3 { margin:0 0 8px 0; font-size:14px; font-weight:600; opacity:.8; }
+  #nextCanvas { width:100%; height:auto; background:#111; border-radius:10px; }
+  .hslist { list-style:none; padding:0; margin:0; font-variant-numeric: tabular-nums; font-size:12px; }
+  .hslist li { display:flex; gap:6px; justify-content:space-between; border-bottom:1px dashed #0002; padding:3px 0; }
+  .controls { position:sticky; bottom:0; left:0; right:0; width:100%; max-width:520px; display:grid; grid-template-columns: repeat(3,1fr); gap:10px; margin-top:6px; }
+  .btn { user-select:none; border:none; border-radius:14px; padding:14px 10px; font-weight:700; background:#222; color:#fff; box-shadow:0 4px 12px #00000030; }
+  .btn:active { transform:translateY(1px); }
+  .btn.secondary { background:#333; } .btn.warn { background:#444; } .btn.icon { padding:8px 10px; font-weight:600; }
+  .overlay { position:absolute; inset:0; display:none; align-items:center; justify-content:center; }
+  .card { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border:1px solid #0003; background:#ffffffcc; color:#000; padding:22px 18px; border-radius:16px; text-align:center; max-width:92%; }
+  .muted { opacity:.7; font-size:14px; }
+  .row { display:flex; gap:8px; justify-content:center; align-items:center; flex-wrap:wrap; }
+  .input { padding:10px 12px; border-radius:10px; border:1px solid #0003; min-width:180px; background:#fff; color:#000; }
+  .pulse-border { animation: levelPulse 800ms ease; } @keyframes levelPulse { from { box-shadow:0 0 0 0 rgba(255,255,255,.5);} to { box-shadow:0 0 0 18px rgba(255,255,255,0);} }
+  .toast { position:absolute; left:50%; top:12%; transform: translateX(-50%); padding:10px 14px; border-radius:12px; border:1px solid #0003; background:#ffffffd0; color:#000; font-weight:700; display:none; }
+  @media (max-width:420px){ .sidebar{min-width:100px;} .btn{padding:12px 8px;} }
+</style>
+</head>
+<body>
+  <div id="pbg1" class="pagebg"></div>
+  <div id="pbg2" class="pagebg"></div>
+
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">Tetris</div>
+      <div class="metrics">
+        <div class="pill">Score: <span id="score">0</span></div>
+        <div class="pill">Lines: <span id="lines">0</span></div>
+        <div class="pill">Level: <span id="level">0</span></div>
+        <div class="pill">Best: <span id="best">0</span></div>
+        <button id="soundBtn" class="btn icon" title="Sound an/aus">Sound</button>
+      </div>
+    </div>
+
+    <div class="game">
+      <div class="board" id="boardWrap">
+        <canvas id="board" width="300" height="600" aria-label="Spielfeld"></canvas>
+        <div id="overlay" class="overlay">
+          <div class="card" id="ov-card">
+            <h2 id="ov-title">Pause</h2>
+            <div id="ov-pause">
+              <p id="ov-sub" class="muted">Tippe "Weiter" um fortzufahren.</p>
+              <div class="row" style="margin-top:10px;">
+                <button id="btnResume" class="btn">Weiter</button>
+                <button id="btnRestart" class="btn secondary">Neu starten</button>
+              </div>
+            </div>
+            <div id="ov-gameover" style="display:none;">
+              <p class="muted">GAME OVER – trage dich in die Highscore ein.</p>
+              <div class="row" style="margin:8px 0;">
+                <input id="hsName" class="input" placeholder="Dein Name" maxlength="24" />
+                <button id="btnSaveScore" class="btn">Score speichern</button>
+              </div>
+              <div class="row" style="margin-top:4px;">
+                <button id="btnExportJson" class="btn secondary">Export JSON</button>
+                <button id="btnExportTxt" class="btn secondary">Export TXT</button>
+                <label class="btn secondary" for="hsImport">Import JSON</label>
+                <input id="hsImport" type="file" accept="application/json" style="display:none;" />
+              </div>
+              <div class="row" style="margin-top:10px;">
+                <button id="btnRestart2" class="btn warn">Neu starten</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="toast" class="toast"></div>
+      </div>
+      <div class="sidebar">
+        <div class="panel">
+          <h3>Nächstes</h3>
+          <canvas id="nextCanvas" width="120" height="120" aria-label="Vorschau nächster Stein"></canvas>
+        </div>
+        <div class="panel">
+          <h3>Highscores (lokal)</h3>
+          <ol id="hsList" class="hslist"></ol>
+        </div>
+        <div class="panel">
+          <h3>Steuerung</h3>
+          <div style="font-size:12px; line-height:1.5;">←/→ bewegen · ↑ drehen · ↓ schneller · Leertaste Hard Drop · P Pause</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls" id="controls">
+      <button class="btn" data-act="left">◀︎</button>
+      <button class="btn" data-act="rotate">⟳</button>
+      <button class="btn" data-act="right">▶︎</button>
+      <button class="btn" data-act="soft">▼</button>
+      <button class="btn warn" data-act="hard">HARD DROP</button>
+      <button class="btn secondary" data-act="pause">PAUSE</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  window.addEventListener('error', function(e){ console.error('[window.onerror]', e.message, e.filename+':'+e.lineno+':'+e.colno); });
+  window.addEventListener('unhandledrejection', function(e){ console.error('[unhandledrejection]', e.reason); });
+
+  var CONFIG = {
+    pagePattern: "bg/page/page-",
+    boardPattern: "bg/board/board-",
+    exts: ["png","jpg","jpeg","webp"],
+    maxIndex: 60,
+    bgChangeMinMs: 120000,
+    bgChangeMaxMs: 300000,
+    bgFadeMs: 1200,
+    levelUpMessage: "Level {n} geschafft!",
+    soundDir: "sounds/",
+    soundExt: "mp3",
+    sounds: {
+      rotate:   ["Rotate1","Rotate2","Rotate3"],
+      moveLeft: ["MoveLeft1","MoveLeft2","MoveLeft3"],
+      moveRight:["MoveRight1","MoveRight2","MoveRight3"],
+      hard:     ["Hard1","Hard2","Hard3"],
+      clear:    ["Clear1","Clear2","Clear3"],
+      levelUp:  ["LevelUp1"]
+    }
+  };
+
+  try {
+    var qp = new URLSearchParams(location.search);
+    if (qp.get("pagePattern")) CONFIG.pagePattern = qp.get("pagePattern");
+    if (qp.get("boardPattern")) CONFIG.boardPattern = qp.get("boardPattern");
+    if (qp.get("exts")) CONFIG.exts = qp.get("exts").split(",").filter(Boolean);
+    if (qp.get("maxIndex")) CONFIG.maxIndex = Math.max(1, parseInt(qp.get("maxIndex"),10)||60);
+    if (qp.get("levelMsg")) CONFIG.levelUpMessage = qp.get("levelMsg");
+  } catch(e) {}
+
+  var COLS=10, ROWS=20;
+  var LOCK_DELAY_MS=500;
+  var LINES_PER_LEVEL=5;
+  var BASE_GRAVITY_MS=1000;
+  var SPEED_FACTOR=0.85;
+  var CLEAR_ANIM_MS=320;
+
+  var COLORS={ I:"#00FFFF", J:"#1E90FF", L:"#FFA500", O:"#FFD700", S:"#7CFC00", T:"#BA55D3", Z:"#FF6347", FLASH:"#ffffffaa" };
+  var SHAPES={
+    I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+    J:[[1,0,0],[1,1,1],[0,0,0]],
+    L:[[0,0,1],[1,1,1],[0,0,0]],
+    O:[[1,1],[1,1]],
+    S:[[0,1,1],[1,1,0],[0,0,0]],
+    Z:[[1,1,0],[0,1,1],[0,0,0]],
+    T:[[0,1,0],[1,1,1],[0,0,0]]
+  };
+
+  function $(s){ return document.querySelector(s); }
+  var boardCanvas=$("#board"), ctx=boardCanvas.getContext("2d");
+  var nextCanvas=$("#nextCanvas"), nctx=nextCanvas.getContext("2d");
+  var scoreEl=$("#score"), linesEl=$("#lines"), levelEl=$("#level"), bestEl=$("#best");
+  var overlay=$("#overlay");
+  var hsName=$("#hsName"), hsList=$("#hsList");
+  var soundBtn=$("#soundBtn"), toastEl=$("#toast");
+  var pbg1=$("#pbg1"), pbg2=$("#pbg2");
+
+  var CELL=24;
+  var bag=[];
+  var state={
+    grid:emptyGrid(), current:null, next:null,
+    score:0, lines:0, level:0, best:Number(localStorage.getItem("tetris_best")||0),
+    running:true, lastTime:0, dropAcc:0
+  };
+  bestEl.textContent=state.best;
+
+  // ---------- Background discovery ----------
+  var pageList=[], boardList=[];
+  var pageIdx = 0, boardIdx = 0;
+  var pageActive = 0;
+  var bgTimer = null;
+  var boardImg=new Image(), boardImgReady=false;
+  var boardFade=null;
+
+  function discoverSeries(pattern, list){
+    var exts=CONFIG.exts, maxI=CONFIG.maxIndex, idx, ei;
+    for(idx=1; idx<=maxI; idx++){
+      for(ei=0; ei<exts.length; ei++){
+        (function(url){
+          var img = new Image();
+          img.onload = function(){ if(list.indexOf(url)<0) { list.push(url); console.log("[BG] gefunden:", url); } };
+          img.onerror = function(){};
+          img.src = url;
+        })(pattern + idx + "." + exts[ei]);
+      }
+    }
+  }
+
+  function setPageBgImmediate(url){
+    var el = pageActive===0? pbg1 : pbg2;
+    el.style.backgroundImage = "url('"+url+"')";
+    pbg1.classList.remove("on"); pbg2.classList.remove("on");
+    el.classList.add("on");
+  }
+  function crossfadePageBg(nextUrl){
+    var show = pageActive===0? pbg2 : pbg1;
+    var hide = pageActive===0? pbg1 : pbg2;
+    show.style.backgroundImage = "url('"+nextUrl+"')";
+    setTimeout(function(){
+      show.classList.add("on");
+      hide.classList.remove("on");
+      pageActive = 1 - pageActive;
+    }, 20);
+  }
+
+  function setBoardBgImmediate(url){
+    boardImgReady=false;
+    boardImg = new Image();
+    boardImg.onload=function(){ boardImgReady=true; };
+    boardImg.src=url;
+  }
+  function crossfadeBoardBg(nextUrl){
+    var img = new Image();
+    img.onload = function(){ boardFade = { to: img, t: 0 }; };
+    img.src = nextUrl;
+  }
+
+  function randRange(min, max){ return Math.floor(Math.random()*(max-min+1))+min; }
+  function pickNext(list, cur){ if(!list.length) return null; if(list.length===1) return 0; var n=cur; while(n===cur){ n = Math.floor(Math.random()*list.length); } return n; }
+
+  function scheduleBgChange(){
+    if(bgTimer) clearTimeout(bgTimer);
+    var delay = randRange(CONFIG.bgChangeMinMs, CONFIG.bgChangeMaxMs);
+    bgTimer = setTimeout(function(){
+      if (pageList.length){ var n = pickNext(pageList, pageIdx); if(n!=null){ pageIdx = n; crossfadePageBg(pageList[pageIdx]); } }
+      if (boardList.length){ var m = pickNext(boardList, boardIdx); if(m!=null){ boardIdx = m; crossfadeBoardBg(boardList[boardIdx]); } }
+      scheduleBgChange();
+    }, delay);
+  }
+
+  // seed with built-in placeholders in case folders are empty
+  pageList.push("bg/page/page-1.png");
+  boardList.push("bg/board/board-1.png");
+
+  // launch discovery (adds more as they load)
+  discoverSeries(CONFIG.pagePattern, pageList);
+  discoverSeries(CONFIG.boardPattern, boardList);
+
+  // NEW: Random initial pick (after short warmup to let discovery add entries)
+  function pickInitialRandom(){
+    if (pageList.length){ pageIdx = Math.floor(Math.random()*pageList.length); setPageBgImmediate(pageList[pageIdx]); }
+    if (boardList.length){ boardIdx = Math.floor(Math.random()*boardList.length); setBoardBgImmediate(boardList[boardIdx]); }
+    // One more pass after a brief delay to catch late-loaded images
+    setTimeout(function(){
+      if (pageList.length>1){ pageIdx = Math.floor(Math.random()*pageList.length); crossfadePageBg(pageList[pageIdx]); }
+      if (boardList.length>1){ boardIdx = Math.floor(Math.random()*boardList.length); crossfadeBoardBg(boardList[boardIdx]); }
+      scheduleBgChange();
+    }, 400);
+  }
+  pickInitialRandom();
+
+  // ---------- Audio ----------
+  var audio={enabled:false, bank:{}};
+  audio.init=function(){
+    var k, arr, i;
+    for (k in CONFIG.sounds){
+      if (!CONFIG.sounds.hasOwnProperty(k)) continue;
+      arr = CONFIG.sounds[k];
+      audio.bank[k] = [];
+      for (i=0;i<arr.length;i++) audio.bank[k].push(new Audio(CONFIG.soundDir+arr[i]+"."+CONFIG.soundExt));
+    }
+  };
+  audio.play=function(k){
+    if(!audio.enabled) return;
+    var L=audio.bank[k]; if(!L||!L.length) return;
+    var a=L[Math.floor(Math.random()*L.length)].cloneNode();
+    a.volume=0.6; a.play()["catch"](function(){});
+  };
+  audio.init();
+  soundBtn.addEventListener("click",function(){
+    audio.enabled=!audio.enabled; soundBtn.textContent = audio.enabled ? "Sound an" : "Sound aus";
+  });
+
+  // ---------- Highscores ----------
+  function getHighscores(){ try{ return JSON.parse(localStorage.getItem("tetris_highscores")||"[]"); }catch(e){ return []; } }
+  function setHighscores(a){ localStorage.setItem("tetris_highscores", JSON.stringify(a)); renderHighscores(); }
+  function saveHighscoreEntry(e){ var a=getHighscores(); a.push(e); a.sort(function(x,y){ return y.score-x.score; }); setHighscores(a.slice(0,20)); }
+  function renderHighscores(){
+    var a=getHighscores(), out=[], i;
+    for(i=0;i<Math.min(10,a.length);i++){ out.push("<li><span>"+(i+1)+". "+escapeHtml(a[i].name)+"</span><span>"+a[i].score+"</span></li>"); }
+    hsList.innerHTML=out.join("");
+  }
+  function escapeHtml(s){
+    var map = {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"};
+    return String(s||"").replace(/[&<>\"']/g, function(ch){ return map[ch]; });
+  }
+  renderHighscores();
+
+  // ---------- Core Tetris (incl. GO-fix) ----------
+  function emptyGrid(){ var g=[], r,c; for(r=0;r<ROWS;r++){ g[r]=[]; for(c=0;c<COLS;c++) g[r][c]=0; } return g; }
+  function rotate(m,d){ d=(d||1); var N=m.length, r=[], y,x; for(y=0;y<N;y++){ r[y]=[]; for(x=0;x<N;x++){ r[y][x]=0; } }
+    for(y=0;y<N;y++) for(x=0;x<N;x++){ if(d>0) r[x][N-1-y]=m[y][x]; else r[N-1-x][y]=m[y][x]; } return r; }
+  function canPlace(g,p,px,py,sO){ var s=sO||p.shape, y,x,nx,ny; for(y=0;y<s.length;y++) for(x=0;x<s[y].length;x++){ if(!s[y][x]) continue; nx=px+x; ny=py+y; if(nx<0||nx>=COLS||ny>=ROWS) return false; if(ny>=0&&g[ny][nx]) return false; } return true; }
+  function merge(g,p){ var shape=p.shape, x=p.x, y=p.y, type=p.type, placed=[], j,i,ny,nx; for(j=0;j<shape.length;j++) for(i=0;i<shape[j].length;i++) if(shape[j][i]){ ny=y+j; nx=x+i; if(ny>=0){ g[ny][nx]=type; placed.push([nx,ny]); } } return placed; }
+  function findFullRows(g){ var r=[], y; for(y=0;y<g.length;y++) if(allFilled(g[y])) r.push(y); return r; }
+  function allFilled(row){ var i; for(i=0;i<row.length;i++) if(!row[i]) return false; return true; }
+  function clearRows(g,rows){ var i,y; for(i=0;i<rows.length;i++){ y=rows[i]; g.splice(y,1); g.unshift(new Array(COLS).fill(0)); } }
+  function createPiece(t){
+    var b=SHAPES[t], N=Math.max(b.length,b[0].length), s=[], j,i;
+    for(j=0;j<N;j++){ s[j]=[]; for(i=0;i<N;i++){ s[j][i]=(b[j]&&b[j][i])?1:0; } }
+    return {type:t,shape:s,x:Math.floor(COLS/2)-Math.ceil(N/2),y:-2,lockStart:null};
+  }
+  function pieceTouchesSky(p){
+    var shp=p.shape, j,i;
+    for(j=0;j<shp.length;j++) for(i=0;i<shp[j].length;i++) if(shp[j][i] && (p.y+j)<0) return true;
+    return false;
+  }
+
+  var particles=[], fireworks=[];
+  var clearAnim=null, impactFlash=[], levelFlashT=0, toast=null;
+
+  function spawnImpactFlash(cells){ var k,c; for(k=0;k<cells.length;k++){ c=cells[k]; impactFlash.push({x:c[0],y:c[1],life:220}); } }
+  function spawnFireworks(){
+    var bursts=4+Math.floor(Math.random()*3), b,k,cx,cy,parts,ang,spd;
+    for(b=0;b<bursts;b++){ cx=Math.random()*COLS; cy=Math.random()*4; parts=24;
+      for(k=0;k<parts;k++){ ang=(k/parts)*Math.PI*2; spd=0.12+Math.random()*0.18; fireworks.push({x:cx,y:cy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd*0.6,life:700+Math.random()*500}); }
+    }
+  }
+  function showToast(text){ toast={text:text, life:1300}; toastEl.textContent=text; toastEl.style.display="block"; }
+
+  function levelSpeedMs(lvl){ var v = Math.round(BASE_GRAVITY_MS * Math.pow(SPEED_FACTOR, lvl)); return (v<26)?26:v; }
+
+  function drawNext(){
+    nctx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
+    if (!state.next) return;
+    var pad=6, size=Math.floor((Math.min(nextCanvas.width,nextCanvas.height)-pad*2)/4);
+    var shp=state.next.shape, y,x,minx=99,maxx=-1,miny=99,maxy=-1;
+    for (y=0;y<shp.length;y++) for (x=0;x<shp[y].length;x++) if (shp[y][x]) { if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
+    var w=(maxx-minx+1), h=(maxy-miny+1);
+    var offx=Math.floor((nextCanvas.width - w*size)/2);
+    var offy=Math.floor((nextCanvas.height - h*size)/2);
+    for (y=miny;y<=maxy;y++) for (x=minx;x<=maxx;x++) if (shp[y][x]) {
+      nctx.fillStyle = COLORS[state.next.type];
+      nctx.fillRect(offx+(x-minx)*size, offy+(y-miny)*size, size-1, size-1);
+    }
+  }
+  function drawFromBag(){ if(!bag.length){ var keys=["I","J","L","O","S","Z","T"]; keys.sort(function(){return Math.random()-0.5;}); bag=keys; } return bag.pop(); }
+  function spawn(){
+    if (!state.next) state.next = createPiece(drawFromBag());
+    state.current = state.next;
+    state.next = createPiece(drawFromBag());
+    if (!canPlace(state.grid, state.current, state.current.x, state.current.y)) { gameOver(); return; }
+    drawNext();
+  }
+  function addScore(lines, softDropCells, hardDropCells){
+    softDropCells=softDropCells||0; hardDropCells=hardDropCells||0;
+    if (lines>0) { var base={1:100,2:300,3:500,4:800}[lines]||0; state.score += base*(state.level+1); }
+    if (softDropCells>0) state.score += softDropCells*1;
+    if (hardDropCells>0) state.score += hardDropCells*2;
+    scoreEl.textContent = state.score;
+    if (state.score > state.best) { state.best = state.score; bestEl.textContent = state.best; localStorage.setItem("tetris_best", state.best); }
+  }
+  function tryRotate(dir){
+    dir=dir||1;
+    var p=state.current; if(!p) return;
+    var rotated=rotate(p.shape, dir), kicks=[0,-1,1,-2,2], i,k;
+    for (i=0;i<kicks.length;i++){ k=kicks[i]; if (canPlace(state.grid, p, p.x+k, p.y, rotated)) { p.shape=rotated; p.x+=k; p.lockStart=null; audio.play("rotate"); return; } }
+  }
+  function move(dx){ var p=state.current; if(!p) return; if (canPlace(state.grid, p, p.x+dx, p.y)) { p.x+=dx; p.lockStart=null; audio.play(dx<0?"moveLeft":"moveRight"); } }
+  function softDrop(){ var p=state.current; if(!p) return false; if (canPlace(state.grid, p, p.x, p.y+1)) { p.y++; addScore(0,1,0); return true; } return false; }
+  function hardDrop(){ var p=state.current; if(!p) return; var cells=0; while (canPlace(state.grid,p,p.x,p.y+1)) { p.y++; cells++; } addScore(0,0,cells); audio.play("hard"); lockPiece(); }
+
+  function startClearAnim(rows){ clearAnim={rows:rows,t:0}; }
+  function finishClear(){
+    var rows=clearAnim.rows.slice(0);
+    clearRows(state.grid, rows);
+    var cleared=rows.length;
+    state.lines += cleared; linesEl.textContent=state.lines;
+    var newLevel=Math.floor(state.lines/LINES_PER_LEVEL);
+    if (newLevel!==state.level) {
+      state.level=newLevel; levelEl.textContent=state.level;
+      levelFlashT=600; boardCanvas.classList.add("pulse-border"); setTimeout(function(){ boardCanvas.classList.remove("pulse-border"); },820);
+      var msg=CONFIG.levelUpMessage.replace("{n}", String(state.level));
+      showToast(msg); spawnFireworks(); audio.play("levelUp");
+    }
+    addScore(cleared); clearAnim=null; spawn();
+  }
+  function pieceTouchesSky(p){
+    var shp=p.shape, j,i;
+    for(j=0;j<shp.length;j++) for(i=0;i<shp[j].length;i++) if (shp[j][i] && (p.y+j)<0) return true;
+    return false;
+  }
+  function lockPiece(){
+    if (pieceTouchesSky(state.current)) { gameOver(); return; }
+    var placed=merge(state.grid, state.current);
+    spawnImpactFlash(placed);
+    var rows=findFullRows(state.grid);
+    if (rows.length>0) { startClearAnim(rows); audio.play("clear"); } else { spawn(); }
+  }
+
+  function tick(dt){
+    if (!state.running) return;
+    state.dropAcc += dt;
+    var speed = levelSpeedMs(state.level);
+    var p = state.current; if (!p) return;
+
+    var i,q,f;
+    if (boardFade){
+      boardFade.t += dt;
+      if (boardFade.t >= CONFIG.bgFadeMs){
+        boardImg = boardFade.to; boardImgReady = true; boardFade = null;
+      }
+    }
+    for (i=particles.length-1;i>=0;i--){ q=particles[i]; q.life-=dt; q.x+=q.vx*dt; q.y+=q.vy*dt; if(q.life<=0) particles.splice(i,1); }
+    for (i=impactFlash.length-1;i>=0;i--){ impactFlash[i].life-=dt; if(impactFlash[i].life<=0) impactFlash.splice(i,1); }
+    for (i=fireworks.length-1;i>=0;i--){ f=fireworks[i]; f.life-=dt; f.x+=f.vx*dt; f.y+=f.vy*dt; f.vy+=0.00025*dt; if(f.life<=0) fireworks.splice(i,1); }
+    if (toast){ toast.life-=dt; if (toast.life<=0){ toast=null; toastEl.style.display="none"; } }
+    if (levelFlashT>0) levelFlashT-=dt;
+
+    if (clearAnim){ clearAnim.t += dt; if (clearAnim.t >= CLEAR_ANIM_MS) { finishClear(); } return; }
+
+    var onGround = !canPlace(state.grid, p, p.x, p.y+1);
+    if (onGround){
+      if (p.lockStart==null) p.lockStart = performance.now();
+      if (performance.now() - p.lockStart >= LOCK_DELAY_MS){ lockPiece(); return; }
+    }
+    if (state.dropAcc >= speed){ state.dropAcc = 0; if (canPlace(state.grid, p, p.x, p.y+1)) p.y++; }
+  }
+
+  function drawCell(gx,gy,color,alpha){
+    if(alpha==null) alpha=1;
+    var x=gx*CELL, y=gy*CELL;
+    ctx.globalAlpha=alpha; ctx.fillStyle=color; ctx.fillRect(x,y,CELL,CELL);
+    ctx.globalAlpha=alpha*0.35; ctx.fillStyle="#ffffff"; ctx.fillRect(x+1,y+1,CELL-2,2); ctx.globalAlpha=alpha;
+  }
+  function drawBoard(){
+    ctx.clearRect(0,0,boardCanvas.width, boardCanvas.height);
+    if (boardImgReady){
+      ctx.globalAlpha = 1;
+      ctx.drawImage(boardImg,0,0,boardCanvas.width,boardCanvas.height);
+    }
+    if (boardFade){
+      var a = Math.max(0, Math.min(1, boardFade.t / CONFIG.bgFadeMs));
+      ctx.globalAlpha = a;
+      ctx.drawImage(boardFade.to,0,0,boardCanvas.width,boardCanvas.height);
+      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha=0.12; ctx.fillStyle="#000"; ctx.fillRect(0,0,boardCanvas.width,boardCanvas.height); ctx.globalAlpha=1;
+
+    var y,x,v;
+    for (y=0;y<ROWS;y++) for (x=0;x<COLS;x++){ v=state.grid[y][x]; if (v) drawCell(x,y,COLORS[v]); else { ctx.fillStyle="#00000033"; ctx.fillRect(x*CELL,y*CELL,CELL,CELL); } }
+    if (clearAnim){
+      var k=Math.min(1, clearAnim.t/CLEAR_ANIM_MS); var a2=Math.sin(k*Math.PI);
+      var idx; ctx.fillStyle=COLORS.FLASH; ctx.globalAlpha=a2;
+      for (idx=0; idx<clearAnim.rows.length; idx++) ctx.fillRect(0, clearAnim.rows[idx]*CELL, COLS*CELL, CELL);
+      ctx.globalAlpha=1;
+    }
+    if (state.current && !clearAnim){
+      var p=state.current, shp=p.shape, j,i;
+      for (j=0;j<shp.length;j++) for (i=0;i<shp[j].length;i++) if (shp[j][i]) { var xx=p.x+i, yy=p.y+j; if (yy>=0) drawCell(xx,yy,COLORS[p.type]); }
+    }
+  }
+
+  function setOverlay(mode){
+    var titleEl=document.getElementById("ov-title");
+    var pauseEl=document.getElementById("ov-pause");
+    var overEl=document.getElementById("ov-gameover");
+    overlay.style.display="flex";
+    if (mode==="pause"){ titleEl.textContent="Pause"; pauseEl.style.display="block"; overEl.style.display="none"; }
+    if (mode==="gameover"){ titleEl.textContent="GAME OVER"; pauseEl.style.display="none"; overEl.style.display="block"; hsName.value = localStorage.getItem("tetris_lastName")||""; }
+  }
+  function gameOver(){ state.running=false; setOverlay("gameover"); }
+  function pauseToggle(){ if (overlay.style.display==="flex" && !state.running) return; state.running=!state.running; if (state.running){ overlay.style.display="none"; state.lastTime=performance.now(); requestAnimationFrame(loop); } else { setOverlay("pause"); } }
+
+  document.getElementById("btnResume").addEventListener("click",function(){ if(!state.running){ state.running=true; overlay.style.display="none"; state.lastTime=performance.now(); requestAnimationFrame(loop);} });
+  document.getElementById("btnRestart").addEventListener("click",function(){ restart(); });
+  document.getElementById("btnRestart2").addEventListener("click",function(){ restart(); });
+  document.getElementById("btnSaveScore").addEventListener("click",function(){
+    var name=(hsName.value||"Player").trim().slice(0,24); localStorage.setItem("tetris_lastName",name);
+    var entry={ name:name, score:state.score, lines:state.lines, level:state.level, date:new Date().toISOString() };
+    saveHighscoreEntry(entry); renderHighscores();
+    var btn=document.getElementById("btnSaveScore"); btn.textContent="Gespeichert ✓"; setTimeout(function(){ btn.textContent="Score speichern"; }, 1000);
+  });
+  document.getElementById("btnExportJson").addEventListener("click",function(){ var blob=new Blob([JSON.stringify(getHighscores(),null,2)],{type:"application/json"}); var url=URL.createObjectURL(blob); var a=document.createElement("a"); a.href=url; a.download="highscores.json"; a.click(); URL.revokeObjectURL(url); });
+  document.getElementById("btnExportTxt").addEventListener("click",function(){ var lines=getHighscores().map(function(e,i){ return (i+1)+". "+e.name+"\t"+e.score+"\tL"+e.level+"\t"+e.lines+" lines\t"+e.date; }); var blob=new Blob([lines.join("\n")],{type:"text/plain"}); var url=URL.createObjectURL(blob); var a=document.createElement("a"); a.href=url; a.download="highscores.txt"; a.click(); URL.revokeObjectURL(url); });
+  document.getElementById("hsImport").addEventListener("change",function(ev){ var f=ev.target.files&&ev.target.files[0]; if(!f) return; var r=new FileReader(); r.onload=function(){ try{var arr=JSON.parse(r.result); if(Object.prototype.toString.call(arr)==="[object Array]") setHighscores(arr);}catch(e){} }; r.readAsText(f); });
+
+  function holdRepeater(el,onFire,opts){ opts=opts||{}; var first=(opts.firstDelay!=null?opts.firstDelay:150), rep=(opts.repeat!=null?opts.repeat:50); var t1=null,t2=null;
+    function start(ev){ ev.preventDefault(); onFire(); t1=setTimeout(function(){ t2=setInterval(onFire,rep); },first); }
+    function stop(){ clearTimeout(t1); clearInterval(t2); t1=t2=null; }
+    el.addEventListener("mousedown",start); el.addEventListener("touchstart",start,{passive:false});
+    window.addEventListener("mouseup",stop); window.addEventListener("touchend",stop); window.addEventListener("touchcancel",stop);
+  }
+  var btns=document.querySelectorAll(".controls .btn");
+  for (var bi=0; bi<btns.length; bi++){
+    (function(b){
+      var a=b.getAttribute("data-act");
+      if(a==="left") holdRepeater(b,function(){ move(-1); });
+      if(a==="right") holdRepeater(b,function(){ move(1); });
+      if(a==="soft") holdRepeater(b,function(){ softDrop(); },{firstDelay:0,repeat:40});
+      if(a==="rotate") b.addEventListener("click",function(){ tryRotate(1); });
+      if(a==="hard") b.addEventListener("click",function(){ hardDrop(); });
+      if(a==="pause") b.addEventListener("click",function(){ pauseToggle(); });
+    })(btns[bi]);
+  }
+
+  var pressActive=false, pressTimer=null, boostId=null;
+  var LONG_PRESS_MS=1000;
+  var BOOST_INTERVAL_MS=30;
+
+  function startBoost(){ if(boostId) return; boostId=setInterval(function(){ softDrop(); }, BOOST_INTERVAL_MS); }
+  function stopBoost(){ if(!boostId) return; clearInterval(boostId); boostId=null; }
+
+  function onPressStart(ev){
+    if(overlay.style.display==="flex" || !state.running) return;
+    ev.preventDefault();
+    if(pressActive) return;
+    pressActive=true;
+    pressTimer=setTimeout(function(){ startBoost(); }, LONG_PRESS_MS);
+  }
+  function onPressEnd(ev){
+    if(!pressActive) return;
+    ev.preventDefault();
+    clearTimeout(pressTimer); pressTimer=null;
+    if(boostId){ stopBoost(); }
+    else { tryRotate(1); }
+    pressActive=false;
+  }
+  boardCanvas.addEventListener("touchstart", onPressStart, {passive:false});
+  boardCanvas.addEventListener("touchend", onPressEnd, {passive:false});
+  boardCanvas.addEventListener("touchcancel", onPressEnd, {passive:false});
+  boardCanvas.addEventListener("mousedown", onPressStart);
+  window.addEventListener("mouseup", onPressEnd);
+
+  function fitBoard(){
+    var maxW=Math.min(window.innerWidth-24,520);
+    var narrow=window.innerWidth<600;
+    var cellSize=Math.floor((narrow?maxW:maxW-160-12)/COLS);
+    var nc=Math.max(14,Math.min(30,cellSize));
+    if(nc!==CELL){ CELL=nc; boardCanvas.width=COLS*CELL; boardCanvas.height=ROWS*CELL; }
+  }
+  boardCanvas.width=COLS*CELL; boardCanvas.height=ROWS*CELL;
+  fitBoard(); window.addEventListener("resize",fitBoard);
+
+  function loop(now){ if(!state.running) return; var dt=now-state.lastTime; state.lastTime=now; tick(dt); drawBoard(); requestAnimationFrame(loop); }
+
+  restart();
+  function restart(){
+    state.grid=emptyGrid(); state.score=0; scoreEl.textContent=0; state.lines=0; linesEl.textContent=0; state.level=0; levelEl.textContent=0;
+    bag=[]; state.next=null; state.current=null; clearAnim=null; impactFlash=[]; particles.length=0; fireworks.length=0; levelFlashT=0; toast=null; toastEl.style.display="none"; state.dropAcc=0;
+    spawn(); state.lastTime=performance.now(); state.running=true; overlay.style.display="none"; requestAnimationFrame(loop);
+  }
+
+  document.addEventListener("keydown", function(e){
+    if (!state.current) return;
+    if (e.repeat && (e.code==="ArrowUp"||e.code==="KeyX"||e.code==="Space")) e.preventDefault();
+    switch (e.code) {
+      case "ArrowLeft": e.preventDefault(); move(-1); break;
+      case "ArrowRight": e.preventDefault(); move(1); break;
+      case "ArrowDown": e.preventDefault(); softDrop(); break;
+      case "ArrowUp": case "KeyX": e.preventDefault(); tryRotate(1); break;
+      case "KeyZ": tryRotate(-1); break;
+      case "Space": e.preventDefault(); hardDrop(); break;
+      case "KeyP": case "Escape": pauseToggle(); break;
+    }
+  }, {passive:false});
+
+  console.log("[TETRIS ES5 v2.8.3] RandInit: zufälliger Start-Hintergrund + Rotation");
+})();</script>
+</body>
+</html>
